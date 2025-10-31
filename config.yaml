@@ -1,0 +1,10 @@
+settings:
+  port: 8125
+  postgresql_env_variable_name: LOG_DAEMON_POSTGRESQL_URL
+  max_connections: 5
+  min_connections: 5
+  num_queue_workers: 2
+  datagram_max_size: 65535
+  log_batch_size: 5
+  log_batch_timeout: 30
+  log_table_name: name_value_logs

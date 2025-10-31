@@ -1,17 +1,17 @@
 from __future__ import annotations
 import socket
 import os
-import psycopg2
 from psycopg2 import pool
 import time
 from multiprocessing import Process, Manager
-from functools import wraps
 import logging
 from queue import Queue, Empty
-import logging
 from contextlib import contextmanager
 from threading import Thread
+from settings import Config
 
+# makes a log that looks like this:
+# 2025-10-31 14:11:25 - INFO - worker 1 is processing 5 items
 logging.basicConfig(
     filename='log_server.log',
     level=logging.DEBUG,
@@ -19,56 +19,67 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-POSTGRESQL_URL = os.environ.get('STAT_DAEMON_POSTGRESQL_URL')
-PORT = 8125
-MIN_CONNECTIONS = 2
-MAX_CONNECTIONS = 20
-
-def start(num_queue_workers: int = 2): 
+def start_log_daemon(): 
+    """
+    I'm making two processes here just in case you can't write to postgres as fast as logs come in.
+    The log_queue has NO MAX SIZE! this could nuke your memory usage, please do some careful monitoring!
+    """
     with Manager() as manager:
         log_queue = manager.Queue()
-
-        p1 = Process(target=listener, args=(log_queue,))
-        p2 = Process(target=log_push_process, args=(log_queue, num_queue_workers,))
-
+        config = Config()
+        config.initialize()
+        p1 = Process(target=listener, args=(log_queue, config, ))
+        p2 = Process(target=log_push_process, args=(log_queue, config, ))
+    
         p1.start()
         p2.start()
 
         p1.join()
         p2.join()
 
-def listener(log_queue: Queue[tuple[str, str, float]]):
+def listener(log_queue: Queue[tuple[str, str, float]], config: Config):
+    """
+    Listening for UDP datagrams from port. Listening for MAX size on datagram data because
+    I don't know how large a message should be.
+    Messages received should be in byte string format.
+    Putting these logs in a queue so they can be processed in parallel by queue workers
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("", PORT))
+    sock.bind(("", config.port))
     while True:
-        data, _ = sock.recvfrom(65535)
+        data, _ = sock.recvfrom(config.datagram_max_size)
         msg = data.strip()
         metric_string = msg.decode('utf-8')
         name, value, timestamp = metric_string.split(":")
         timestamp = float(timestamp)
         log_queue.put((name, value, timestamp))
 
-def log_push_process(log_queue: Queue[tuple[str, str, float]], num_queue_workers: int):
-    connection_pool = ConnectionPoolManager(POSTGRESQL_URL, min_conn=num_queue_workers)
+def log_push_process(log_queue: Queue[tuple[str, str, float]], config: Config):
+    """
+    Making a connection pool here to prevent constant opening/closing of connections across the worker threads.
+    Hopefully this works at scale!
+    """
+    connection_pool = ConnectionPoolManager(os.environ.get(config.postgresql_env_variable_name), min_conn=config.min_connections, max_conn=config.max_connections)
     queue_worker_threads = []
     try:
-        for i in range(num_queue_workers):
+        for i in range(config.num_queue_workers):
             t = Thread(target=log_queue_worker, args=(connection_pool, log_queue, i,))
             t.start()
             queue_worker_threads.append(t)
     except Exception as e:
+        # graceful shutdown is not a garuntee. you might have some hanging postgres connections, but
+        # they should die after a reasonable time
         logging.error(f"Shutting down gracefully after {e}")
         connection_pool.close_all()
 
 
 def log_queue_worker(connection_pool: ConnectionPoolManager ,log_queue: Queue[tuple[str, str, float]], thread_num: int):
     logging.info(f'Starting log_queue_worker {thread_num}')
-    # this function should open a cursor, and commit a log on loop.
     batch = []
     last_flush = time.time()
     
-    batch_timeout = 100
-    batch_size = 5
+    batch_timeout = Config().log_batch_timeout
+    batch_size = Config().log_batch_size
 
     while True:
         try:
@@ -92,13 +103,14 @@ def log_queue_worker(connection_pool: ConnectionPoolManager ,log_queue: Queue[tu
                 last_flush = time.time()
 
 def process_batch(connection_pool: ConnectionPoolManager, batch: list[tuple[str, str, float]]):
+    config = Config()
     try:
         with connection_pool.get_connection() as conn:
             with conn.cursor() as cursor:
                 # Your SQL implementation here
                 # Example framework:
                 cursor.executemany(
-                    "INSERT INTO name_value_logs (name, value, timestamp) VALUES (%s, %s, %s)",
+                    f"INSERT INTO {config.log_table_name} (name, value, timestamp) VALUES (%s, %s, %s)",
                     batch
                 )
                 
@@ -111,7 +123,7 @@ def process_batch(connection_pool: ConnectionPoolManager, batch: list[tuple[str,
 class ConnectionPoolManager:
     """Manages the psycopg2 connection pool"""
     
-    def __init__(self, dsn: str, min_conn: int = MIN_CONNECTIONS, max_conn: int = MAX_CONNECTIONS):
+    def __init__(self, dsn: str, min_conn: int, max_conn: int):
         self.pool = None
         self.dsn = dsn
         self.min_conn = min_conn
@@ -159,4 +171,4 @@ class ConnectionPoolManager:
             logging.info("All connections closed")
 
 if __name__ == "__main__":
-    start()
+    start_log_daemon()
