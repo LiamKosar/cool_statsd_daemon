@@ -6,12 +6,14 @@ class Config(object):
     postgresql_env_variable_name: str
     max_connections: int
     min_connections: int
-    num_queue_workers: int
+    num_log_workers: int
+    num_transaction_workers: int
     datagram_max_size: int
     log_batch_size: int
     # seconds
     log_batch_timeout: int
     log_table_name: str
+    transaction_table_name: str
 
 
     def __new__(cls):
@@ -27,10 +29,12 @@ class Config(object):
             self.postgresql_env_variable_name = daemon_settings['postgresql_env_variable_name']
             self.max_connections = daemon_settings['max_connections']
             self.min_connections = daemon_settings['min_connections']
-            self.num_queue_workers = daemon_settings['num_queue_workers']
+            self.num_log_workers = daemon_settings['num_log_workers']
+            self.num_transaction_workers = daemon_settings['num_transaction_workers']
             self.datagram_max_size = daemon_settings['datagram_max_size']
             self.log_batch_size = daemon_settings['log_batch_size']
             self.log_batch_timeout = daemon_settings['log_batch_timeout']
             self.log_table_name = daemon_settings['log_table_name']
+            self.transaction_table_name = daemon_settings['transaction_table_name']
             
 

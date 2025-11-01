@@ -17,12 +17,13 @@ def start():
 
 def push_indef(sock: socket.socket): 
 
-    interval_start = time.time()
-    cool_str = f'name:value:{interval_start}'.encode('utf-8')
     while True:
-        sock.sendto(cool_str, ("127.0.0.1", PORT))
+        log_str = f'l:log_name:log_value:{time.time()}'.encode('utf-8')
+        transaction_str = f't:transaction_name:transaction_value:{time.time()}'.encode('utf-8')
+        sock.sendto(log_str, ("127.0.0.1", PORT))
+        sock.sendto(transaction_str, ("127.0.0.1", PORT))
         print('sent')
-        time.sleep(2)
+        time.sleep(.02)
         
 
 
